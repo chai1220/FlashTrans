@@ -85,11 +85,11 @@ py -3.12 -m venv .venv
 
 ## 6. 技术说明（关键模块）
 
-- [main.py](file:///a:/sys/Desk/idea/翻译APP/main.py)：系统托盘常驻、Windows 全局热键（F1/F2/F3）、后台线程调度
-- [core_engine.py](file:///a:/sys/Desk/idea/翻译APP/core_engine.py)：离线 OCR + 离线翻译核心（支持 dummy_mode）
-- [main_window.py](file:///a:/sys/Desk/idea/翻译APP/main_window.py)：仪表盘窗口（左右原文/译文 + 手动翻译）
-- [snipping_tool.py](file:///a:/sys/Desk/idea/翻译APP/snipping_tool.py)：全屏透明截图选区（输出截图与选区全局坐标）
-- [ui_popups.py](file:///a:/sys/Desk/idea/翻译APP/ui_popups.py)：鼠标附近悬浮窗（F1/F2）与选区覆盖显示（F3）
+- [main.py](main.py)：系统托盘常驻、Windows 全局热键（F1/F2/F3）、后台线程调度
+- [core_engine.py](core_engine.py)：离线 OCR + 离线翻译核心（支持 dummy_mode）
+- [main_window.py](main_window.py)：仪表盘窗口（左右原文/译文 + 手动翻译）
+- [snipping_tool.py](snipping_tool.py)：全屏透明截图选区（输出截图与选区全局坐标）
+- [ui_popups.py](ui_popups.py)：鼠标附近悬浮窗（F1/F2）与选区覆盖显示（F3）
 
 ## 7. 常见问题
 
