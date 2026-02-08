@@ -1,0 +1,5 @@
+PySide6
+numpy
+rapidocr_onnxruntime
+ctranslate2
+sentencepiece
