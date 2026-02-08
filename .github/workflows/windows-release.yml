@@ -76,5 +76,4 @@ jobs:
         with:
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            Output/*.zip
             Output/*.exe
