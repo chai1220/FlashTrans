@@ -58,7 +58,8 @@
 
 ```powershell
 .\.venv\Scripts\python -m pip install -U pyinstaller
-.\.venv\Scripts\pyinstaller -y --noconsole --name FlashTrans --add-data "models;models" main.py
+.\.venv\Scripts\python .\scripts\generate_icon.py --out .\assets\icon.ico
+.\.venv\Scripts\pyinstaller -y FlashTrans.spec
 ```
 
 生成结果：
@@ -67,6 +68,12 @@
 
 把 `dist/FlashTrans/` 整个目录压缩成 zip，发给朋友即可。
 
+也可以直接用脚本一键生成 Portable.zip：
+
+```powershell
+.\scripts\build_portable.ps1
+```
+
 ## 生成 Setup 安装包（Inno Setup 思路）
 
 1) 先用 PyInstaller 生成 `dist/FlashTrans/`（onedir）
@@ -74,3 +81,22 @@
    - 安装目录：`{pf}\FlashTrans`
    - 创建快捷方式、开机启动（可选）
 
+本地一键打包（需要先安装 Inno Setup 6）：
+
+```powershell
+.\scripts\build_installer.ps1
+```
+
+如果你用的是“便携版/自解压版”的 Inno Setup，且 `iscc.exe` 不在 PATH，可先设置环境变量再运行：
+
+```powershell
+$env:INNO_SETUP_HOME = "D:\Apps\Inno Setup 6"
+# 或直接指定 ISCC.exe
+# $env:INNO_SETUP_ISCC = "D:\Apps\Inno Setup 6\ISCC.exe"
+.\scripts\build_installer.ps1
+```
+
+GitHub 自动打包：
+
+- 推送 tag（例如 `v1.0.0`）后，会在 GitHub Actions 里自动生成 `Portable.zip + Setup.exe` 并作为 Release 附件上传
+- 工作流文件：`.github/workflows/windows-release.yml`

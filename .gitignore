@@ -4,6 +4,13 @@ __pycache__/
 *.pyd
 *.pyo
 *.log
+*.tmp
+*.bak
+*.old
+.env
+.env.*
+!.env.example
+.python-version
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -11,7 +18,15 @@ __pycache__/
 build/
 dist/
 *.spec
+!FlashTrans.spec
 Output/
+*.zip
+*.exe
+*.msi
+*.7z
+*.rar
+
+assets/icon.ico
 
 .DS_Store
 Thumbs.db
@@ -20,3 +35,20 @@ Thumbs.db
 .vscode/
 
 models/
+
+# crash reports / dumps (may contain local paths)
+nuitka-crash-report.xml
+*.dmp
+*.dump
+*.stackdump
+*.minidump
+
+# secrets / certs / keys
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.kdbx
+*.crt
+*.cer

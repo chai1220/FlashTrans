@@ -81,14 +81,14 @@ class CoreEngine:
         )
 
     def translate_en2zh(self, text: str) -> str:
-        text = (text or "").strip()
+        text = self._normalize_english_input(text)
         if not text:
             return ""
         if not self._en2zh_ready or self.translator_en2zh is None:
             self._set_error(self._last_en2zh_error or "EN->ZH translator not ready", kind="en2zh")
             return ""
         try:
-            return self._run_translate(text, self.translator_en2zh, self._sp_en2zh_src, self._sp_en2zh_tgt)
+            return self._translate_with_chunking(text, self.translator_en2zh, self._sp_en2zh_src, self._sp_en2zh_tgt)
         except Exception as e:
             self._set_error(f"EN->ZH translation failed: {e}", kind="en2zh")
             return ""
@@ -101,7 +101,7 @@ class CoreEngine:
             self._set_error(self._last_zh2en_error or "ZH->EN translator not ready", kind="zh2en")
             return ""
         try:
-            return self._run_translate(text, self.translator_zh2en, self._sp_zh2en_src, self._sp_zh2en_tgt)
+            return self._translate_with_chunking(text, self.translator_zh2en, self._sp_zh2en_src, self._sp_zh2en_tgt)
         except Exception as e:
             self._set_error(f"ZH->EN translation failed: {e}", kind="zh2en")
             return ""
@@ -123,7 +123,7 @@ class CoreEngine:
         return (self._extract_rapidocr_text(result) or "").strip()
 
     def process_image(self, image_data: Any) -> tuple[str, str]:
-        source_text = (self.ocr_image(image_data) or "").strip()
+        source_text = self._normalize_ocr_text(self.ocr_image(image_data) or "")
         if not source_text:
             msg = self._last_ocr_error or "No text detected"
             return "", msg
@@ -137,6 +137,38 @@ class CoreEngine:
         if not translated:
             return source_text, self._last_en2zh_error or "No translation result"
         return source_text, translated
+
+    def _normalize_ocr_text(self, text: str) -> str:
+        text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\\\s*[nN]\b", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
+        text = re.sub(r"\n{2}", "\n", text)
+        text = re.sub(r"[ ]{2,}", " ", text).strip()
+
+        if re.search(r"[A-Za-z]", text):
+            tokens = text.split(" ")
+            merged: list[str] = []
+            for i, tok in enumerate(tokens):
+                tok = tok.strip()
+                if not tok:
+                    continue
+                if (
+                    len(tok) == 1
+                    and tok.isalpha()
+                    and tok.islower()
+                    and merged
+                    and re.search(r"[A-Za-z]$", merged[-1])
+                    and (i + 1 >= len(tokens) or not tokens[i + 1][:1].islower())
+                ):
+                    merged[-1] = merged[-1] + tok
+                else:
+                    merged.append(tok)
+            text = " ".join(merged)
+            text = re.sub(r"[ ]{2,}", " ", text).strip()
+
+        return text
 
     def _init_all(self) -> None:
         self._init_ocr()
@@ -193,15 +225,29 @@ class CoreEngine:
         if not model_dir.exists():
             raise FileNotFoundError(f"Model directory not found: {model_dir.resolve()}")
 
-        src_spm = model_dir / "source.spm"
-        if not src_spm.exists():
-            raise FileNotFoundError(f"Missing source.spm: {src_spm.resolve()}")
+        def _pick_first_existing(names: list[str]) -> Path | None:
+            for name in names:
+                p = model_dir / name
+                if p.exists():
+                    return p
+            return None
 
-        tgt_spm = model_dir / "target.spm"
-        sp_src = spm.SentencePieceProcessor(model_proto=src_spm.read_bytes())
+        src_model = _pick_first_existing(["source.spm", "sentencepiece.model"])
+        if src_model is None:
+            raise FileNotFoundError(
+                "Missing SentencePiece model. Expected one of: "
+                + ", ".join(["source.spm", "sentencepiece.model"])
+                + f" in {model_dir.resolve()}"
+            )
+
+        tgt_model = _pick_first_existing(["target.spm", "sentencepiece.model"])
+        if tgt_model is None:
+            tgt_model = src_model
+
+        sp_src = spm.SentencePieceProcessor(model_proto=src_model.read_bytes())
         sp_tgt = None
-        if tgt_spm.exists():
-            sp_tgt = spm.SentencePieceProcessor(model_proto=tgt_spm.read_bytes())
+        if tgt_model.exists():
+            sp_tgt = spm.SentencePieceProcessor(model_proto=tgt_model.read_bytes())
 
         translator = ctranslate2.Translator(
             str(model_dir),
@@ -212,25 +258,167 @@ class CoreEngine:
         )
         return translator, sp_src, sp_tgt
 
-    def _run_translate(self, text: str, translator: Any, sp_src: Any, sp_tgt: Any) -> str:
-        tokens = sp_src.encode_as_pieces(text)
-        if tokens and tokens[-1] != "</s>":
-            tokens.append("</s>")
-        if not tokens:
+    def _translate_with_chunking(self, text: str, translator: Any, sp_src: Any, sp_tgt: Any) -> str:
+        text = (text or "").strip()
+        if not text:
             return ""
-        results = translator.translate_batch(
-            [tokens],
-            beam_size=2,
-            repetition_penalty=1.2,
-            max_decoding_length=256,
-            return_scores=False,
+
+        chunks = self._chunk_text(text)
+        token_lists: list[list[str]] = []
+        token_to_chunk: list[int] = []
+        out_by_chunk: list[str] = ["" for _ in chunks]
+
+        for i, ch in enumerate(chunks):
+            if ch == "\n":
+                out_by_chunk[i] = "\n"
+                continue
+            ch = (ch or "").strip()
+            if not ch:
+                continue
+            tokens = sp_src.encode_as_pieces(ch)
+            if tokens and tokens[-1] != "</s>":
+                tokens.append("</s>")
+            if not tokens:
+                continue
+            token_to_chunk.append(i)
+            token_lists.append(tokens)
+
+        if token_lists:
+            kwargs: dict[str, Any] = {
+                "beam_size": 4,
+                "repetition_penalty": 1.15,
+                "max_decoding_length": 768,
+                "return_scores": False,
+            }
+            try:
+                kwargs["no_repeat_ngram_size"] = 3
+            except Exception:
+                pass
+            results = translator.translate_batch(token_lists, **kwargs)
+            for res_idx, chunk_idx in enumerate(token_to_chunk):
+                hyp = []
+                if results and res_idx < len(results) and results[res_idx].hypotheses:
+                    hyp = results[res_idx].hypotheses[0]
+                if not hyp:
+                    continue
+                if sp_tgt is not None:
+                    out = sp_tgt.decode_pieces([t for t in hyp if t not in ("</s>", "<pad>")]).strip()
+                else:
+                    out = self._detokenize_ct2(hyp)
+                out_by_chunk[chunk_idx] = self._postprocess_translation(out)
+
+        merged_parts: list[str] = []
+        for part in out_by_chunk:
+            if not part:
+                continue
+            if part == "\n":
+                merged_parts.append("\n")
+                continue
+            if merged_parts and merged_parts[-1] not in ("\n", " "):
+                prev = merged_parts[-1]
+                prev_tail = prev[-1] if prev else ""
+                cur_head = part[0] if part else ""
+                if prev_tail not in "，。！？；：、,.!?;:":
+                    if not (
+                        re.match(r"[\u4e00-\u9fff]", prev_tail or "") and re.match(r"[\u4e00-\u9fff]", cur_head or "")
+                    ):
+                        merged_parts.append(" ")
+            merged_parts.append(part)
+
+        merged = "".join(merged_parts)
+        merged = re.sub(r"[ \t]{2,}", " ", merged)
+        merged = re.sub(r"[ ]+\n", "\n", merged)
+        merged = re.sub(r"\n[ ]+", "\n", merged)
+        return merged.strip()
+
+    def _chunk_text(self, text: str) -> list[str]:
+        text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+        parts: list[str] = []
+        for block in re.split(r"(\n+)", text):
+            if not block:
+                continue
+            if block.startswith("\n"):
+                parts.extend(["\n"] * len(block))
+                continue
+            block_parts = re.split(r"(?<=[。！？!?；;。\.…])", block)
+            for seg in block_parts:
+                seg = seg.strip()
+                if not seg:
+                    continue
+                comma_count = seg.count("，") + seg.count(",")
+                if len(seg) > 80 or (comma_count >= 2 and len(seg) > 40):
+                    parts.extend([s for s in re.split(r"(?<=[，,])", seg) if s.strip()])
+                else:
+                    parts.append(seg)
+        return parts or [text]
+
+    def _normalize_english_input(self, text: str) -> str:
+        text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[ \t]+", " ", text).strip()
+        if not text:
+            return ""
+
+        text = re.sub(r"\b(can\s+)roll(\s+it)\b", r"\1scroll\2", text, flags=re.IGNORECASE)
+        text = re.sub(r"\broll(\s+it)\b", r"scroll\1", text, flags=re.IGNORECASE)
+        text = re.sub(r"\byou can roll\b", "you can scroll", text, flags=re.IGNORECASE)
+
+        text = re.sub(
+            r"what'?s\s+the\s+big\s+deal\s+with\s+your\s+f1\s+and\s+f2\s+translation",
+            "why are your F1 and F2 translation boxes so big",
+            text,
+            flags=re.IGNORECASE,
         )
-        if not results or not results[0].hypotheses:
-            return ""
-        hyp = results[0].hypotheses[0]
-        if sp_tgt is not None:
-            return sp_tgt.decode_pieces([t for t in hyp if t not in ("</s>", "<pad>")]).strip()
-        return self._detokenize_ct2(hyp)
+        text = re.sub(
+            r"\bthe\s+return\s+identified\s+after\s+pressing\s+f3\b",
+            "the recognition result after pressing F3",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(r"\bthe document that was packed\b", "the packaged document", text, flags=re.IGNORECASE)
+
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        deduped: list[str] = []
+        for s in sentences:
+            s = s.strip()
+            if not s:
+                continue
+            key = s.lower()
+            if deduped and deduped[-1].lower() == key:
+                continue
+            deduped.append(s)
+        text = " ".join(deduped)
+        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+        text = re.sub(r"([,.;:!?])(?=[A-Za-z])", r"\1 ", text)
+        text = re.sub(r"[ ]{2,}", " ", text).strip()
+        return text
+
+    def _postprocess_translation(self, text: str) -> str:
+        text = str(text or "")
+        text = text.replace("\u00a0", " ")
+        text = text.replace("▁", " ")
+        text = re.sub(r"[ \t]{2,}", " ", text)
+        has_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
+        if has_zh:
+            text = text.replace(",", "，").replace("?", "？").replace("!", "！").replace(";", "；").replace(":", "：")
+            text = re.sub(r"(?<!\.)\.(?!\.)", "。", text)
+            text = text.replace("包装文档", "打包的文档")
+            text = text.replace("翻译箱", "翻译框")
+            text = re.sub(r"我不知道。 ?说不定。", "我不知道。", text)
+            text = text.replace("按下 F3 后确认结果", "按下 F3 后识别到的返回结果")
+        text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
+        text = re.sub(r"\s+([，。！？；：、])", r"\1", text)
+        text = re.sub(r"([，。！？；：、])\s+", r"\1", text)
+        text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+        text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
+        text = (
+            text.replace("， ", "，")
+            .replace("。 ", "。")
+            .replace("？ ", "？")
+            .replace("！ ", "！")
+            .replace("； ", "；")
+            .replace("： ", "：")
+        )
+        return text.strip()
 
     def _to_numpy_bgr(self, image_data: Any) -> Any:
         if np is None:

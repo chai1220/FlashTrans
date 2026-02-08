@@ -1,0 +1,80 @@
+name: build-windows-release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set version env
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ([string]::IsNullOrWhiteSpace($tag)) { $tag = "dev" }
+          $ver = $tag
+          if ($tag.StartsWith("v")) { $ver = $tag.Substring(1) }
+          $ver = ($ver -replace '[^0-9A-Za-z._-]', '-')
+          "APP_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TAG_NAME=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install deps
+        shell: pwsh
+        run: |
+          python -m pip install -U pip
+          python -m pip install -r requirements.txt
+          python -m pip install -U pyinstaller
+
+      - name: Generate icon
+        shell: pwsh
+        run: |
+          if (!(Test-Path assets)) { New-Item -ItemType Directory -Path assets | Out-Null }
+          python scripts\generate_icon.py --out assets\icon.ico
+
+      - name: Build portable (PyInstaller)
+        shell: pwsh
+        run: |
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
+          if (Test-Path dist) { Remove-Item -Recurse -Force dist }
+          if (!(Test-Path Output)) { New-Item -ItemType Directory -Path Output | Out-Null }
+          python -m PyInstaller -y FlashTrans.spec
+          $zip = "Output\\FlashTrans-Portable-$env:APP_VERSION.zip"
+          if (Test-Path $zip) { Remove-Item -Force $zip }
+          Compress-Archive -Path "dist\\FlashTrans\\*" -DestinationPath $zip
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          iscc "installer\\FlashTrans.iss"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlashTrans-windows-${{ env.APP_VERSION }}
+          path: Output/*
+
+      - name: Publish GitHub Release assets
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          files: |
+            Output/*.zip
+            Output/*.exe

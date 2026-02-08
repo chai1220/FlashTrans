@@ -8,7 +8,7 @@ from ctypes import wintypes
 from pathlib import Path
 
 from PySide6.QtCore import QAbstractNativeEventFilter, QObject, QThread, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QCursor, QGuiApplication, QImage
+from PySide6.QtGui import QColor, QCursor, QGuiApplication, QIcon, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QMessageBox, QSystemTrayIcon, QStyle
 
 from core_engine import CoreEngine
@@ -48,6 +48,34 @@ LRESULT = getattr(wintypes, "LRESULT", ctypes.c_ssize_t)
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+
+
+def _make_logo_icon() -> QIcon:
+    icon = QIcon()
+    for size in (16, 20, 24, 32, 48, 64, 128, 256):
+        pm = QPixmap(size, size)
+        pm.fill(Qt.transparent)
+        painter = QPainter(pm)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(0, 0, 0))
+
+        margin = max(1, size // 10)
+        bar_h = max(2, size // 5)
+        stem_w = max(2, size // 5)
+        stem_h = max(2, size - margin * 2 - bar_h)
+
+        radius_bar = max(1, bar_h // 2)
+        radius_stem = max(1, stem_w // 2)
+
+        painter.drawRoundedRect(margin, margin, size - margin * 2, bar_h, radius_bar, radius_bar)
+        stem_x = (size - stem_w) // 2
+        stem_y = margin + bar_h
+        painter.drawRoundedRect(stem_x, stem_y, stem_w, stem_h, radius_stem, radius_stem)
+
+        painter.end()
+        icon.addPixmap(pm)
+    return icon
 
 RegisterHotKey = user32.RegisterHotKey
 RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
@@ -349,7 +377,9 @@ class _GlobalDismissHooks(QObject):
                         if self._popup.isVisible() and self._popup.isActiveWindow():
                             return CallNextHookEx(self._kbd_hook or 0, nCode, wParam, lParam)
                         if self._popup.isVisible() and self._popup.input_edit.isVisible():
-                            QTimer.singleShot(0, lambda: self._popup.f2_canceled_with_paste.emit(self._popup.input_edit.text()))
+                            QTimer.singleShot(
+                                0, lambda: self._popup.f2_canceled_with_paste.emit(self._popup.input_edit.toPlainText())
+                            )
                             QTimer.singleShot(0, self._popup.hide)
                         else:
                             QTimer.singleShot(0, self._popup.close)
@@ -855,37 +885,43 @@ class AppController(QObject):
         self._dashboard.set_target_text("")
 
 
-def _validate_models_or_exit(model_dir_en2zh: Path, model_dir_zh2en: Path) -> None:
-    missing: list[Path] = []
-    for d in (model_dir_en2zh, model_dir_zh2en):
-        sp = d / "source.spm"
-        if not sp.exists():
-            missing.append(sp.resolve())
-    if missing:
-        QMessageBox.critical(None, "FlashTrans", "Missing model file(s):\n" + "\n".join(str(p) for p in missing))
-        sys.exit(1)
-
-
 def main() -> int:
     app = QApplication([])
     app.setApplicationName("FlashTrans")
     app.setQuitOnLastWindowClosed(False)
 
-    model_dir_en2zh = Path("./models/opus-mt-en-zh-int8").resolve()
-    model_dir_zh2en = Path("./models/opus-mt-zh-en-int8").resolve()
-    _validate_models_or_exit(model_dir_en2zh, model_dir_zh2en)
+    base_dir = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+    models_root = base_dir / "models"
+    if not models_root.exists():
+        alt = base_dir / "_internal" / "models"
+        if alt.exists():
+            models_root = alt
+    model_dir_en2zh = (models_root / "opus-mt-en-zh-int8").resolve()
+    model_dir_zh2en = (models_root / "opus-mt-zh-en-int8").resolve()
 
-    icon = app.style().standardIcon(QStyle.SP_FileDialogInfoView)
+    icon = _make_logo_icon()
+    app.setWindowIcon(icon)
     tray = QSystemTrayIcon(icon, app)
     menu = QMenu()
     act_dashboard = menu.addAction("打开仪表盘")
     act_exit = menu.addAction("退出")
     tray.setContextMenu(menu)
-    tray.setToolTip("FlashTrans（离线翻译）\nF1 划词中英互译 / F2 输入中英互译 / F3 截图中英互译")
+    tray.setToolTip("FlashTrans\nF1 划词中英互译 / F2 输入中英互译 / F3 截图中英互译")
     tray.show()
 
     overlay = SnippingOverlay()
     engine = CoreEngine(model_dir_en2zh=model_dir_en2zh, model_dir_zh2en=model_dir_zh2en)
+    st = engine.status()
+    if (not st.en2zh_ready) or (not st.zh2en_ready):
+        details = []
+        if st.en2zh_error:
+            details.append(f"EN->ZH: {st.en2zh_error}")
+        if st.zh2en_error:
+            details.append(f"ZH->EN: {st.zh2en_error}")
+        tip = "离线翻译模型未就绪（程序仍可启动）。\n把 models/ 放到 FlashTrans.exe 同目录后重启。"
+        if details:
+            tip = tip + "\n\n" + "\n".join(details[:2])
+        tray.showMessage("FlashTrans", tip, QSystemTrayIcon.Warning, 7000)
     dashboard = DashboardWindow()
     dashboard.hide()
     controller = AppController(tray, overlay, engine, dashboard)
