@@ -128,7 +128,7 @@ def main() -> int:
     out_path = Path(args.out).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logo_path = (out_path.parent / "new_logo.png").resolve()
+    logo_path = (out_path.parent / "logo.png").resolve()
     if not logo_path.exists():
         raise FileNotFoundError(f"Logo not found: {logo_path}")
     use_logo = True

@@ -52,17 +52,17 @@ jobs:
           if (!(Test-Path assets)) { New-Item -ItemType Directory -Path assets | Out-Null }
           python scripts\generate_icon.py --out assets\icon.ico
 
-      - name: Build installer + portable
-        shell: pwsh
-        run: |
-          .\scripts\build_installer.ps1
-
       - name: Install Inno Setup
         shell: pwsh
         run: |
           choco install innosetup -y
 
-      - name: Build installer (Inno Setup)
+      - name: Build installer + portable
+        shell: pwsh
+        run: |
+          .\scripts\build_installer.ps1
+
+      - name: Build installer (Inno Setup)  # Optional backup step
         shell: pwsh
         run: |
           iscc "installer\\FlashTrans.iss"
