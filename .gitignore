@@ -1,0 +1,104 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+*.log
+*.tmp
+*.bak
+*.old
+.env
+.env.*
+!.env.example
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+build/
+dist/
+*.spec
+!FlashTrans.spec
+Output/
+*.zip
+*.exe
+*.msi
+*.7z
+*.rar
+
+assets/icon.ico
+
+.DS_Store
+Thumbs.db
+
+.idea/
+.vscode/
+
+models/
+.cache/
+.tmp/
+
+# crash reports / dumps (may contain local paths)
+nuitka-crash-report.xml
+*.dmp
+*.dump
+*.stackdump
+*.minidump
+
+# local settings / exports (may contain personal information)
+*.reg
+*.ini
+*.toml.local
+*.yaml.local
+*.yml.local
+*.json.local
+
+# secrets / certs / keys
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+*.kdbx
+*.crt
+*.cer
+
+# application data and logs
+*.log
+*.sqlite
+*.db
+*.sqlite3
+*.db3
+
+# Windows specific
+Desktop.ini
+ehthumbs.db
+ehthumbs_vista.db
+
+# macOS specific
+.DS_Store
+._*
+
+# Linux specific
+*.swp
+*~
+.fuse_hidden*
+
+# IDE specific (additional)
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Inno Setup installation scripts (may contain GUIDs)
+*.iss
+
+# Python specific
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ropeproject/
+.pytype/
