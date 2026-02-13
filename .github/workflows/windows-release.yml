@@ -12,6 +12,12 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        flavor: [nllb, qwen]
+    env:
+      FLASHTRANS_FLAVOR: ${{ matrix.flavor }}
     steps:
       - uses: actions/checkout@v4
 
@@ -35,6 +41,9 @@ jobs:
         run: |
           python -m pip install -U pip
           python -m pip install -r requirements.txt
+          if ("${{ matrix.flavor }}" -eq "qwen") {
+            python -m pip install -r requirements-qwen.txt
+          }
           python -m pip install -U pyinstaller
 
       - name: Generate icon
@@ -43,16 +52,10 @@ jobs:
           if (!(Test-Path assets)) { New-Item -ItemType Directory -Path assets | Out-Null }
           python scripts\generate_icon.py --out assets\icon.ico
 
-      - name: Build portable (PyInstaller)
+      - name: Build installer + portable
         shell: pwsh
         run: |
-          if (Test-Path build) { Remove-Item -Recurse -Force build }
-          if (Test-Path dist) { Remove-Item -Recurse -Force dist }
-          if (!(Test-Path Output)) { New-Item -ItemType Directory -Path Output | Out-Null }
-          python -m PyInstaller -y FlashTrans.spec
-          $zip = "Output\\FlashTrans-Portable-$env:APP_VERSION.zip"
-          if (Test-Path $zip) { Remove-Item -Force $zip }
-          Compress-Archive -Path "dist\\FlashTrans\\*" -DestinationPath $zip
+          .\scripts\build_installer.ps1
 
       - name: Install Inno Setup
         shell: pwsh
@@ -67,7 +70,7 @@ jobs:
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: FlashTrans-windows-${{ env.APP_VERSION }}
+          name: FlashTrans-${{ matrix.flavor }}-windows-${{ env.APP_VERSION }}
           path: Output/*
 
       - name: Publish GitHub Release assets
@@ -76,4 +79,4 @@ jobs:
         with:
           tag_name: ${{ env.TAG_NAME }}
           files: |
-            Output/*.exe
+            Output/*Setup*.exe

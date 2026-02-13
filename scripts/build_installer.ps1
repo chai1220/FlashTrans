@@ -1,13 +1,18 @@
 $ErrorActionPreference = "Stop"
 
+param(
+  [string]$Flavor,
+  [string]$Version
+)
+
 $ProjectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ProjectRoot
 
-if ([string]::IsNullOrWhiteSpace($env:APP_VERSION)) {
-  $env:APP_VERSION = "dev"
-}
+if (-not [string]::IsNullOrWhiteSpace($Flavor)) { $env:FLASHTRANS_FLAVOR = $Flavor }
+if (-not [string]::IsNullOrWhiteSpace($Version)) { $env:APP_VERSION = $Version }
+if ([string]::IsNullOrWhiteSpace($env:APP_VERSION)) { $env:APP_VERSION = "dev" }
 
-& (Join-Path $ProjectRoot "scripts\\build_portable.ps1")
+& (Join-Path $ProjectRoot "scripts\\build_portable.ps1") -Flavor $env:FLASHTRANS_FLAVOR -Version $env:APP_VERSION
 
 $Iscc = $null
 if (!( [string]::IsNullOrWhiteSpace($env:INNO_SETUP_ISCC) ) -and (Test-Path $env:INNO_SETUP_ISCC)) {
@@ -33,8 +38,15 @@ if ([string]::IsNullOrWhiteSpace($Iscc)) {
 }
 
 $OutputDir = Join-Path $ProjectRoot "Output"
-$SetupPath = Join-Path $OutputDir ("FlashTrans-Setup-{0}.exe" -f $env:APP_VERSION)
-Get-ChildItem -Path $OutputDir -Filter "FlashTrans-Setup-*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $SetupPath } | Remove-Item -Force -ErrorAction SilentlyContinue
+$Flavor = $env:FLASHTRANS_FLAVOR
+if ([string]::IsNullOrWhiteSpace($Flavor)) { $Flavor = "opus" }
+$Flavor = $Flavor.ToLower().Trim()
+$AppName = "FlashTrans"
+if ($Flavor -eq "nllb") { $AppName = "FlashTrans-NLLB" }
+if ($Flavor -eq "qwen") { $AppName = "FlashTrans-Qwen" }
+
+$SetupPath = Join-Path $OutputDir ("{0}-Setup-{1}.exe" -f $AppName, $env:APP_VERSION)
+Get-ChildItem -Path $OutputDir -Filter "$AppName-Setup-*.exe" -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $SetupPath } | Remove-Item -Force -ErrorAction SilentlyContinue
 
 & $Iscc (Join-Path $ProjectRoot "installer\\FlashTrans.iss")
 Write-Host (Join-Path $ProjectRoot "Output")

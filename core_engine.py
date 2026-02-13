@@ -45,7 +45,15 @@ class CoreEngine:
         self,
         model_dir_en2zh: str | os.PathLike = "./models/opus-mt-en-zh-int8",
         model_dir_zh2en: str | os.PathLike = "./models/opus-mt-zh-en-int8",
+        mt_backend: str = "opus",
+        nllb_model_dir: str | os.PathLike | None = None,
+        nllb_src_lang_en: str = "eng_Latn",
+        nllb_tgt_lang_zh: str = "zho_Hans",
     ) -> None:
+        self._mt_backend = str(mt_backend or "opus").strip().lower()
+        self._nllb_model_dir = Path(nllb_model_dir) if nllb_model_dir else None
+        self._nllb_src_lang_en = str(nllb_src_lang_en or "eng_Latn").strip()
+        self._nllb_tgt_lang_zh = str(nllb_tgt_lang_zh or "zho_Hans").strip()
         self._model_dir_en2zh = Path(model_dir_en2zh)
         self._model_dir_zh2en = Path(model_dir_zh2en)
 
@@ -84,10 +92,15 @@ class CoreEngine:
         text = self._normalize_english_input(text)
         if not text:
             return ""
+        if self._mt_backend == "none":
+            self._set_error("Translation backend disabled", kind="en2zh")
+            return ""
         if not self._en2zh_ready or self.translator_en2zh is None:
             self._set_error(self._last_en2zh_error or "EN->ZH translator not ready", kind="en2zh")
             return ""
         try:
+            if self._mt_backend == "nllb":
+                return self._translate_nllb(text, src_lang=self._nllb_src_lang_en, tgt_lang=self._nllb_tgt_lang_zh)
             return self._translate_with_chunking(text, self.translator_en2zh, self._sp_en2zh_src, self._sp_en2zh_tgt)
         except Exception as e:
             self._set_error(f"EN->ZH translation failed: {e}", kind="en2zh")
@@ -97,10 +110,15 @@ class CoreEngine:
         text = (text or "").strip()
         if not text:
             return ""
+        if self._mt_backend == "none":
+            self._set_error("Translation backend disabled", kind="zh2en")
+            return ""
         if not self._zh2en_ready or self.translator_zh2en is None:
             self._set_error(self._last_zh2en_error or "ZH->EN translator not ready", kind="zh2en")
             return ""
         try:
+            if self._mt_backend == "nllb":
+                return self._translate_nllb(text, src_lang=self._nllb_tgt_lang_zh, tgt_lang=self._nllb_src_lang_en)
             return self._translate_with_chunking(text, self.translator_zh2en, self._sp_zh2en_src, self._sp_zh2en_tgt)
         except Exception as e:
             self._set_error(f"ZH->EN translation failed: {e}", kind="zh2en")
@@ -127,6 +145,8 @@ class CoreEngine:
         if not source_text:
             msg = self._last_ocr_error or "No text detected"
             return "", msg
+        if self._mt_backend == "none":
+            return source_text, ""
         is_zh = bool(re.search(r"[\u4e00-\u9fff]", source_text))
         if is_zh:
             translated = self.translate_zh2en(source_text)
@@ -138,6 +158,16 @@ class CoreEngine:
             return source_text, self._last_en2zh_error or "No translation result"
         return source_text, translated
 
+    def translate_nllb(self, text: str, src_lang: str, tgt_lang: str) -> str:
+        text = (text or "").strip()
+        if not text:
+            return ""
+        if self._mt_backend != "nllb":
+            raise RuntimeError("NLLB backend not enabled")
+        if not self._en2zh_ready or self.translator_en2zh is None:
+            raise RuntimeError(self._last_en2zh_error or "NLLB translator not ready")
+        return self._translate_nllb(text, src_lang=src_lang, tgt_lang=tgt_lang)
+
     def _normalize_ocr_text(self, text: str) -> str:
         text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
         text = re.sub(r"[ \t]+", " ", text)
@@ -146,6 +176,10 @@ class CoreEngine:
         text = re.sub(r"(?<!\n)\n(?!\n)", " ", text)
         text = re.sub(r"\n{2}", "\n", text)
         text = re.sub(r"[ ]{2,}", " ", text).strip()
+
+        if re.search(r"[\u4e00-\u9fff]", text):
+            text = text.replace("义件", "文件")
+            text = text.replace("工试", "重试")
 
         if re.search(r"[A-Za-z]", text):
             tokens = text.split(" ")
@@ -172,8 +206,13 @@ class CoreEngine:
 
     def _init_all(self) -> None:
         self._init_ocr()
-        self._init_translator_en2zh()
-        self._init_translator_zh2en()
+        if self._mt_backend == "none":
+            return
+        if self._mt_backend == "nllb":
+            self._init_translator_nllb()
+        else:
+            self._init_translator_en2zh()
+            self._init_translator_zh2en()
 
     def _init_ocr(self) -> None:
         try:
@@ -217,6 +256,33 @@ class CoreEngine:
             self._zh2en_ready = False
             self._set_error(str(e), kind="zh2en")
 
+    def _init_translator_nllb(self) -> None:
+        try:
+            model_dir = self._nllb_model_dir
+            if model_dir is None:
+                raise ValueError("nllb_model_dir not set")
+            translator, sp_src, sp_tgt = self._load_ct2_translator(model_dir)
+
+            self.translator_en2zh = translator
+            self._sp_en2zh_src = sp_src
+            self._sp_en2zh_tgt = sp_tgt
+            self._en2zh_ready = True
+
+            self.translator_zh2en = translator
+            self._sp_zh2en_src = sp_src
+            self._sp_zh2en_tgt = sp_tgt
+            self._zh2en_ready = True
+        except Exception as e:
+            self.translator_en2zh = None
+            self._sp_en2zh_src = None
+            self._sp_en2zh_tgt = None
+            self._en2zh_ready = False
+            self.translator_zh2en = None
+            self._sp_zh2en_src = None
+            self._sp_zh2en_tgt = None
+            self._zh2en_ready = False
+            self._set_error(str(e), kind="en2zh")
+
     def _load_ct2_translator(self, model_dir: Path) -> tuple[Any, Any, Any]:
         if ctranslate2 is None:
             raise ModuleNotFoundError("ctranslate2 not installed")
@@ -232,15 +298,15 @@ class CoreEngine:
                     return p
             return None
 
-        src_model = _pick_first_existing(["source.spm", "sentencepiece.model"])
+        src_model = _pick_first_existing(["sentencepiece.model", "source.spm", "sentencepiece.bpe.model"])
         if src_model is None:
             raise FileNotFoundError(
                 "Missing SentencePiece model. Expected one of: "
-                + ", ".join(["source.spm", "sentencepiece.model"])
+                + ", ".join(["sentencepiece.model", "source.spm", "sentencepiece.bpe.model"])
                 + f" in {model_dir.resolve()}"
             )
 
-        tgt_model = _pick_first_existing(["target.spm", "sentencepiece.model"])
+        tgt_model = _pick_first_existing(["target.spm", "sentencepiece.model", "sentencepiece.bpe.model"])
         if tgt_model is None:
             tgt_model = src_model
 
@@ -258,7 +324,15 @@ class CoreEngine:
         )
         return translator, sp_src, sp_tgt
 
-    def _translate_with_chunking(self, text: str, translator: Any, sp_src: Any, sp_tgt: Any) -> str:
+    def _translate_with_chunking(
+        self,
+        text: str,
+        translator: Any,
+        sp_src: Any,
+        sp_tgt: Any,
+        target_prefix_token: str | None = None,
+        source_prefix_tokens: list[str] | None = None,
+    ) -> str:
         text = (text or "").strip()
         if not text:
             return ""
@@ -276,6 +350,8 @@ class CoreEngine:
             if not ch:
                 continue
             tokens = sp_src.encode_as_pieces(ch)
+            if source_prefix_tokens:
+                tokens = [*source_prefix_tokens, *tokens]
             if tokens and tokens[-1] != "</s>":
                 tokens.append("</s>")
             if not tokens:
@@ -285,20 +361,31 @@ class CoreEngine:
 
         if token_lists:
             kwargs: dict[str, Any] = {
-                "beam_size": 4,
-                "repetition_penalty": 1.15,
-                "max_decoding_length": 768,
+                "beam_size": 7,
+                "repetition_penalty": 1.5,
+                "max_decoding_length": 1024,
                 "return_scores": False,
             }
             try:
-                kwargs["no_repeat_ngram_size"] = 3
+                kwargs["no_repeat_ngram_size"] = 5
             except Exception:
                 pass
+            if target_prefix_token:
+                kwargs["target_prefix"] = [[str(target_prefix_token)]] * len(token_lists)
             results = translator.translate_batch(token_lists, **kwargs)
             for res_idx, chunk_idx in enumerate(token_to_chunk):
                 hyp = []
                 if results and res_idx < len(results) and results[res_idx].hypotheses:
                     hyp = results[res_idx].hypotheses[0]
+                drop_leading: set[str] = set()
+                if target_prefix_token:
+                    drop_leading.add(str(target_prefix_token))
+                if source_prefix_tokens:
+                    drop_leading.update([str(t) for t in source_prefix_tokens if t])
+                while hyp and hyp[0] in drop_leading:
+                    hyp = hyp[1:]
+                if hyp:
+                    hyp = [t for t in hyp if not (t.startswith("__") and t.endswith("__"))]
                 if not hyp:
                     continue
                 if sp_tgt is not None:
@@ -331,6 +418,20 @@ class CoreEngine:
         merged = re.sub(r"\n[ ]+", "\n", merged)
         return merged.strip()
 
+    def _translate_nllb(self, text: str, src_lang: str, tgt_lang: str) -> str:
+        src_lang = str(src_lang or "").strip()
+        tgt_lang = str(tgt_lang or "").strip()
+        if not src_lang or not tgt_lang:
+            raise ValueError("Missing NLLB language codes")
+        return self._translate_with_chunking(
+            text,
+            self.translator_en2zh,
+            self._sp_en2zh_src,
+            self._sp_en2zh_tgt,
+            target_prefix_token=tgt_lang,
+            source_prefix_tokens=[src_lang],
+        )
+
     def _chunk_text(self, text: str) -> list[str]:
         text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
         parts: list[str] = []
@@ -345,9 +446,12 @@ class CoreEngine:
                 seg = seg.strip()
                 if not seg:
                     continue
+                has_zh = bool(re.search(r"[\u4e00-\u9fff]", seg))
                 comma_count = seg.count("，") + seg.count(",")
-                if len(seg) > 80 or (comma_count >= 2 and len(seg) > 40):
+                if has_zh and (len(seg) > 80 or (comma_count >= 2 and len(seg) > 40)):
                     parts.extend([s for s in re.split(r"(?<=[，,])", seg) if s.strip()])
+                elif (not has_zh) and (len(seg) > 180):
+                    parts.extend([s for s in re.split(r"(?<=[,])", seg) if s.strip()])
                 else:
                     parts.append(seg)
         return parts or [text]
@@ -396,15 +500,30 @@ class CoreEngine:
         text = str(text or "")
         text = text.replace("\u00a0", " ")
         text = text.replace("▁", " ")
+        text = text.replace("⁇", "")
+        text = text.replace("??", "")
         text = re.sub(r"[ \t]{2,}", " ", text)
         has_zh = bool(re.search(r"[\u4e00-\u9fff]", text))
         if has_zh:
             text = text.replace(",", "，").replace("?", "？").replace("!", "！").replace(";", "；").replace(":", "：")
             text = re.sub(r"(?<!\.)\.(?!\.)", "。", text)
-            text = text.replace("包装文档", "打包的文档")
-            text = text.replace("翻译箱", "翻译框")
-            text = re.sub(r"我不知道。 ?说不定。", "我不知道。", text)
-            text = text.replace("按下 F3 后确认结果", "按下 F3 后识别到的返回结果")
+            term_map = {
+                "变量位移活塞": "变量柱塞泵",
+                "可变位移活塞": "变量柱塞泵",
+                "可变位移活塞泵": "变量柱塞泵",
+                "变量位移活塞泵": "变量柱塞泵",
+                "反响": "齿隙",
+                "侧隙": "齿隙",
+                "表面修饰": "表面粗糙度",
+                "表面光洁度": "表面粗糙度",
+                "公差": "公差",
+                "tolerances": "公差",
+                "柱塞": "柱塞",
+                "活塞": "柱塞",
+                "泵": "泵",
+            }
+            for wrong, correct in term_map.items():
+                text = text.replace(wrong, correct)
         text = re.sub(r"(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])", "", text)
         text = re.sub(r"\s+([，。！？；：、])", r"\1", text)
         text = re.sub(r"([，。！？；：、])\s+", r"\1", text)

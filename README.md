@@ -2,6 +2,20 @@
 
 默认界面语言：简体中文。
 
+**最新更新 (v1.1.2)**：
+- 修复 F4 聊天界面，添加“清除记录”和“保存记录”功能
+- 修复 F5 快捷键在设置中修改后失效的问题
+- 优化 EXE 文件图标显示，解决模糊和边界框问题
+- 移除学科填写功能，简化翻译流程
+- 优化 Qwen 本地推理性能（自动线程分配）
+- 改进 NLLB 翻译质量（参数优化 + 机械术语映射）
+
+本仓库支持三个构建口味（flavor）：
+
+- **nllb**：离线翻译使用 NLLB（多语言）
+- **qwen**：离线翻译 & F4 默认使用本地 Qwen（GGUF）
+- **opus**：离线翻译使用 Opus-MT（历史默认）
+
 ## 1. 运行环境
 
 - Windows 10/11
@@ -23,6 +37,60 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python main.py
 ```
 
+## 3.1 构建便携版（解压即用）
+
+```powershell
+.\scripts\build_portable.ps1 -Flavor nllb -Version "1.1.2"
+.\scripts\build_portable.ps1 -Flavor qwen -Version "1.1.2"
+```
+
+构建产物在 `Output/`。
+
+## 3.2 构建安装包（Inno Setup）
+
+需要先安装 Inno Setup 6（确保 `ISCC.exe` 可用）。**注意**：ISS 安装脚本文件（`.iss`）默认被 `.gitignore` 排除，如需使用脚本自动构建，请确保 `installer/` 目录下存在对应的 ISS 文件。
+
+**方法一：使用构建脚本**（需要 ISS 文件存在）：
+```powershell
+.\scripts\build_installer.ps1 -Flavor nllb -Version "1.1.2"
+.\scripts\build_installer.ps1 -Flavor qwen -Version "1.1.2"
+```
+
+**方法二：手动编译**（推荐）：
+1. 打开 Inno Setup Compiler 6
+2. 分别打开 `installer/FlashTrans-NLLB.iss` 和 `installer/FlashTrans-Qwen.iss`
+3. 点击 **Build → Compile** 编译安装包
+4. 输出文件位于 `Output/` 目录
+
+> **安全提示**：ISS 文件包含随机生成的 GUID，不包含敏感信息。如需保留 ISS 文件在仓库中，请移除 `.gitignore` 中的 `*.iss` 规则。
+
+## 3.3 完整构建流程（CLI命令）
+
+以下是一步到位的CLI命令，可在项目根目录的PowerShell终端中执行：
+
+```powershell
+# 1. 清理缓存和构建文件
+Remove-Item -Recurse -Force build, dist, .cache, .tmp -ErrorAction SilentlyContinue
+
+# 2. 生成图标（确保assets/new_logo.png存在）
+python scripts/generate_icon.py --out assets/icon.ico
+
+# 3. 构建便携版（两个版本）
+.\scripts\build_portable.ps1 -Flavor nllb -Version "1.1.2"
+.\scripts\build_portable.ps1 -Flavor qwen -Version "1.1.2"
+
+# 4. 构建安装包（需要Inno Setup 6）
+# 注意：ISS 文件默认被 .gitignore 排除，如需使用脚本构建请确保 ISS 文件存在
+# 推荐手动编译：打开 Inno Setup，分别编译 installer/FlashTrans-NLLB.iss 和 installer/FlashTrans-Qwen.iss
+
+# 5. 查看输出
+Get-ChildItem Output\
+```
+
+构建完成后：
+- 便携版ZIP文件：`Output/FlashTrans-{NLLB,Qwen}-Portable-1.1.2.zip`
+- 安装包EXE文件：`Output/FlashTrans-{NLLB,Qwen}-Setup-1.1.2.exe`
+
 ## 4. 使用方式
 
 - 程序启动后：常驻系统托盘（右键托盘图标可退出）
@@ -40,16 +108,43 @@ py -3.12 -m venv .venv
 - F3：截图翻译
   - 按 F3 后全屏框选区域，识别并翻译后在选区位置覆盖显示结果
   - 覆盖窗右下角“提取文字到仪表盘”：打开仪表盘（左原文 / 右译文）
+- F4：本地聊天助手
+  - 按 F4 打开聊天窗口，可与本地 Qwen 模型进行对话
+  - 窗口内输入问题，点击“发送”或按 Ctrl+Enter 发送
+  - 支持“清除记录”和“保存记录”功能
+  - “显示思考过程”按钮可查看模型的推理过程
+- F5：显示/激活仪表盘
+  - 按 F5 打开或激活翻译仪表盘窗口
+  - 如果仪表盘已最小化或隐藏，按 F5 会恢复显示
+  - 仪表盘显示历史翻译记录（左原文 / 右译文），支持手动编辑和重新翻译
 
 ## 5. 模型说明（可选）
 
-默认假设翻译模型路径：
+离线模型默认从 `./models/` 读取；打包版会把模型复制到 `_internal/models/`，解压后可直接使用。
 
-```
-./models/opus-mt-en-zh-int8/
-```
+常见模型文件：
+
+- NLLB：`./models/nllb-200-1.3b-int8/`
+- Qwen：`./models/qwen3-1.7b-q4.gguf`
+- Opus：`./models/opus-mt-en-zh-int8/` 与 `./models/opus-mt-zh-en-int8/`
 
 如果没有放置翻译模型或 OCR 初始化失败，会在结果里显示具体原因（例如模型目录不存在），方便你定位问题。
+
+## 5.4 隐私与 API Key
+
+- API 配置使用 Windows 的 QSettings 存储在当前用户侧，并用 DPAPI 加密保存 API Key。
+- 不会写入项目目录，也不会被打包到发布 zip/安装包里。
+- 仓库内的 `.gitignore` 已忽略构建产物与常见敏感文件，避免误提交泄露信息。
+
+## 5.5 安装包构建安全
+
+- **ISS 文件 GUID 安全性**：Inno Setup 安装脚本（`.iss` 文件）包含随机生成的 GUID 用于标识应用程序。这些 GUID 不包含任何个人信息，仅为安装程序提供唯一标识。
+- **GUID 更新**：本项目已为两个版本（NLLB/Qwen）生成了新的随机 GUID，确保无历史关联信息。
+- **Git 忽略策略**：`.gitignore` 文件已配置忽略 `*.iss` 文件，防止意外提交安装脚本。如需保留 ISS 文件在仓库中，可移除该规则。
+- **构建建议**：
+  - 使用 Inno Setup 6 打开对应的 ISS 文件直接编译，无需配置环境变量。
+  - 每次发布新版本时，建议生成新的随机 GUID 以增强安全性。
+  - 编译后的安装包（`.exe`）不包含源代码或敏感信息。
 
 ### 5.1 获取模型（推荐自己转换，最稳）
 
@@ -101,6 +196,12 @@ py -3.12 -m venv .venv
 
 ## 🧩 致谢与引用 (Credits)
 本项目使用了以下开源模型和库，感谢原作者的贡献：
-* **翻译模型**: [Helsinki-NLP/Opus-MT](https://huggingface.co/Helsinki-NLP) (Apache-2.0 License)
+* **翻译模型**:
+  - [Helsinki-NLP/Opus-MT](https://huggingface.co/Helsinki-NLP) (Apache-2.0 License)
+  - [Meta NLLB-200](https://huggingface.co/facebook/nllb-200-1.3B) (MIT License) - 多语言翻译模型
+* **大语言模型**: [Qwen/Qwen2.5-1.7B](https://huggingface.co/Qwen/Qwen2.5-1.7B) (Apache-2.0 License) - 本地对话与翻译增强
 * **OCR 引擎**: [RapidOCR](https://github.com/RapidAI/RapidOCR) (Apache-2.0 License)
-* **推理加速**: CTranslate2 & ONNXRuntime
+* **推理框架**:
+  - CTranslate2 (用于 NLLB/Opus-MT 翻译模型加速)
+  - ONNXRuntime (用于 RapidOCR 推理加速)
+  - llama.cpp (用于 Qwen 模型本地推理)
